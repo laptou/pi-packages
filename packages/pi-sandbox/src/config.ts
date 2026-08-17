@@ -26,6 +26,7 @@ export type PiSandboxConfig = {
   };
   filesystem: {
     additionalAllowRead: readonly string[];
+    additionalWriteDirectories: readonly string[];
   };
   hostIPC: HostIPCConfig;
 };
@@ -44,6 +45,7 @@ export const DEFAULT_PI_SANDBOX_CONFIG: Readonly<PiSandboxConfig> = Object.freez
     }),
     filesystem: Object.freeze({
       additionalAllowRead: Object.freeze([]),
+      additionalWriteDirectories: Object.freeze([]),
     }),
     hostIPC: Object.freeze({
       mode: "off",
@@ -134,7 +136,7 @@ export function parsePiSandboxConfig(value: unknown): PiSandboxConfig {
   const filesystem = value.filesystem ?? {};
   rejectUnknownKeys(
     filesystem,
-    ["additionalAllowRead"],
+    ["additionalAllowRead", "additionalWriteDirectories"],
     "filesystem",
   );
   const additionalAllowRead =
@@ -151,6 +153,22 @@ export function parsePiSandboxConfig(value: unknown): PiSandboxConfig {
   ) {
     throw new Error(
       "invalid pi-sandbox configuration: filesystem.additionalAllowRead must be an array of absolute paths",
+    );
+  }
+  const additionalWriteDirectories =
+    filesystem.additionalWriteDirectories ??
+    DEFAULT_PI_SANDBOX_CONFIG.filesystem.additionalWriteDirectories;
+  if (
+    !Array.isArray(additionalWriteDirectories) ||
+    additionalWriteDirectories.some(
+      (path) =>
+        typeof path !== "string" ||
+        path.trim() === "" ||
+        !isAbsolute(path),
+    )
+  ) {
+    throw new Error(
+      "invalid pi-sandbox configuration: filesystem.additionalWriteDirectories must be an array of absolute paths",
     );
   }
 
@@ -203,6 +221,7 @@ export function parsePiSandboxConfig(value: unknown): PiSandboxConfig {
     },
     filesystem: {
       additionalAllowRead: [...new Set(additionalAllowRead)],
+      additionalWriteDirectories: [...new Set(additionalWriteDirectories)],
     },
     hostIPC: {
       mode: hostIPCMode as HostIPCMode,
@@ -224,6 +243,9 @@ function defaultPiSandboxConfig(): PiSandboxConfig {
     filesystem: {
       additionalAllowRead: [
         ...DEFAULT_PI_SANDBOX_CONFIG.filesystem.additionalAllowRead,
+      ],
+      additionalWriteDirectories: [
+        ...DEFAULT_PI_SANDBOX_CONFIG.filesystem.additionalWriteDirectories,
       ],
     },
     hostIPC: {

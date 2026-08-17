@@ -120,6 +120,7 @@ export type SandboxPolicy = {
 
 export type CreateDefaultPolicyOptions = {
   additionalAllowRead?: readonly string[];
+  additionalWriteDirectories?: readonly string[];
 };
 
 export function isSecretDenyWriteBasename(name: string): boolean {
@@ -243,7 +244,11 @@ export function createDefaultPolicy(
         "/dev/null",
         ...(options.additionalAllowRead ?? []),
       ],
-      allowWrite: [workspace, "/dev/null"],
+      allowWrite: [
+        workspace,
+        "/dev/null",
+        ...(options.additionalWriteDirectories ?? []),
+      ],
       denyWrite: [
         join(workspace, ".pi", "settings.json"),
         join(workspace, ".pi", "sandbox.json"),
