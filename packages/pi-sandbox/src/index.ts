@@ -1,8 +1,10 @@
 import type {
   BashOperations,
+  EventBus,
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   createBashToolDefinition,
@@ -139,9 +141,25 @@ function enableExternalWorkerIsolation(
   };
 }
 
-function humanApproval(ctx: ExtensionContext): HumanApproval {
+function safeEmit(
+  events: EventBus | undefined,
+  channel: string,
+  data: unknown,
+): void {
+  try {
+    events?.emit(channel, data);
+  } catch {
+    // Best-effort broadcast; listener failures must not block approval flow.
+  }
+}
+
+function humanApproval(
+  ctx: ExtensionContext,
+  events?: EventBus,
+): HumanApproval {
   return async (request, reason, signal) => {
     if (!ctx.hasUI) return "deny";
+    const requestId = randomUUID();
     const target =
       request.surface === "host-ipc"
         ? request.command ?? request.operation
@@ -156,14 +174,35 @@ function humanApproval(ctx: ExtensionContext): HumanApproval {
           ? "\nWarning: the first sandboxed attempt may already have had partial side effects. The retry runs on the host outside the OS sandbox."
           : "\nWarning: this command will run on the host outside the OS sandbox."
         : "";
+
+    safeEmit(events, "sandbox:approval_prompt", {
+      requestId,
+      surface: request.surface,
+      operation: request.operation,
+      command: request.command,
+      path: request.path ?? request.resolvedPath,
+      destination: request.destination,
+      target,
+      reason,
+    });
+
     const selected = await ctx.ui.select(
       `Sandbox approval required: ${request.operation} ${target}${hostWarning}${suffix}`,
       ["Allow this exact operation once", "Deny"],
       { signal },
     );
-    return selected === "Allow this exact operation once"
-      ? "allow-once"
-      : "deny";
+
+    const decision =
+      selected === "Allow this exact operation once" ? "allow-once" : "deny";
+
+    safeEmit(events, "sandbox:approval_decision", {
+      requestId,
+      surface: request.surface,
+      operation: request.operation,
+      decision,
+    });
+
+    return decision;
   };
 }
 
@@ -173,6 +212,7 @@ function sandboxOperations(
   additionalAllowRead: readonly string[],
   hostIPC: HostIPCConfig,
   sandbox?: PiSandboxExtensionOptions["sandbox"],
+  events?: EventBus,
 ): BashOperations {
   return {
     exec(command, cwd, options) {
@@ -185,7 +225,7 @@ function sandboxOperations(
         sessionId: currentSessionId,
         scopeKey: `${currentSessionId}:turn:${turnIndex()}`,
         signal: options.signal,
-        humanApproval: humanApproval(ctx),
+        humanApproval: humanApproval(ctx, events),
       };
       const local = createLocalBashOperations({ shellPath });
       return runCommandWithHostIPC({
@@ -294,6 +334,7 @@ async function performRegistration(
           additionalAllowRead,
           hostIPC,
           options.sandbox,
+          pi.events,
         ),
       });
       return tool.execute(id, params, signal, onUpdate, ctx);
@@ -372,7 +413,7 @@ async function performRegistration(
           sessionId: currentSessionId,
           scopeKey: `${currentSessionId}:turn:${currentTurn}`,
           agentName: parentId ? "nested-subagent" : "subagent",
-          humanApproval: humanApproval(ctx),
+          humanApproval: humanApproval(ctx, pi.events),
         };
         return {
           task,
@@ -548,6 +589,7 @@ async function performRegistration(
       additionalAllowRead,
       hostIPC,
       options.sandbox,
+      pi.events,
     ),
   }));
 
@@ -597,7 +639,7 @@ async function performRegistration(
             sessionId: sessionId(ctx),
             scopeKey: `${sessionId(ctx)}:turn:${currentTurn}`,
             agentName: `pi-subagents-worker:${worker.id}`,
-            humanApproval: humanApproval(ctx),
+            humanApproval: humanApproval(ctx, pi.events),
           }),
           {
             // Observability-only: never influences allow/deny, and a failure
